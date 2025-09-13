@@ -46,15 +46,15 @@
         }
     </style>
 </head>
-<body class="bg-gray-100">
+<body class="bg-teal-50">
 
     <!-- ログイン画面 -->
-    <div id="login-view" class="main-container flex items-center justify-center p-4">
-        <div class="w-full max-w-sm bg-white p-8 rounded-lg shadow-md">
-            <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">ログイン</h1>
-            <p class="text-center text-gray-600 mb-6">ニックネームを入力してください</p>
-            <input type="text" id="nickname-input" class="w-full border rounded p-3 text-lg mb-4" placeholder="ニックネーム">
-            <button id="login-btn" class="w-full bg-blue-500 text-white px-4 py-3 rounded-lg hover:bg-blue-600 font-bold disabled:bg-gray-400" disabled>
+    <div id="login-view" class="flex items-center justify-center p-4" style="min-height: 100vh;">
+        <div class="w-full max-w-sm bg-white p-8 rounded-2xl shadow-lg border-2 border-teal-200">
+            <h1 class="text-3xl font-bold text-center text-teal-600 mb-2">ストレッチ＆筋トレ</h1>
+            <p class="text-center text-gray-500 mb-8">ニックネームを入力してはじめよう</p>
+            <input type="text" id="nickname-input" class="w-full border-gray-300 rounded-lg p-3 text-lg mb-6 focus:ring-teal-500 focus:border-teal-500" placeholder="ニックネーム">
+            <button id="login-btn" class="w-full bg-teal-500 text-white px-4 py-3 rounded-lg hover:bg-teal-600 font-bold disabled:bg-gray-400 transition-colors duration-300" disabled>
                 <span id="login-btn-text">初期化中...</span>
             </button>
         </div>
@@ -224,18 +224,17 @@
             // --- 認証状態の監視 ---
             onAuthStateChanged(auth, async (user) => {
                 if (user) {
-                    // 匿名ユーザーとしてログイン済み
+                    if (isAuthReady) return; // 既に初期化済みの場合は何もしない
                     isAuthReady = true;
                     console.log("Firebase Auth is ready. UID:", user.uid);
                     await checkLoginState();
                 } else {
-                    // 未ログイン状態。匿名サインインを試みる
-                    try {
+                     try {
                         await signInAnonymously(auth);
-                        // 成功すると onAuthStateChanged が再度呼ばれる
                         console.log("Signed in anonymously.");
                     } catch (error) {
                         console.error("Anonymous sign-in failed:", error);
+                        loginBtnText.textContent = 'エラー';
                         showAlertModal(`Firebaseへの接続に失敗しました: ${error.message}`);
                     }
                 }
@@ -243,121 +242,87 @@
 
             // --- ログイン/ログアウト処理 ---
             async function checkLoginState() {
-                // 認証が完了していない場合は何もしない
                 if (!isAuthReady) {
                     console.log("Auth is not ready yet. Waiting...");
                     return;
                 }
-                
                 const storedNickname = localStorage.getItem('nickname');
                 if (storedNickname) {
                     await handleLogin(storedNickname);
                 } else {
-                    loginView.classList.remove('hidden');
+                    loginView.style.display = 'flex'; // flexboxで中央寄せを維持
                     appContainer.classList.add('hidden');
                     loginBtn.disabled = false;
                     loginBtnText.textContent = '記録をはじめる';
                 }
             }
 
-            // ログイン処理
             async function handleLogin(name) {
                 loginBtn.disabled = true;
                 loginBtnText.textContent = '読み込み中...';
-                
                 nickname = name;
-                
                 try {
+                    await loadUserData(); // ユーザーデータを読み込む
                     await initializeAppLogic(); // アプリのメインロジックを初期化
-                    
                     localStorage.setItem('nickname', nickname);
                     displayNickname.textContent = nickname;
-                    
-                    // 成功したら画面を切り替え
-                    loginView.classList.add('hidden');
+                    loginView.style.display = 'none'; // ログイン画面を非表示
                     appContainer.classList.remove('hidden');
                 } catch (error) {
                     console.error("Login process failed:", error);
                     showAlertModal(`データの読み込み中にエラーが発生しました: ${error.message}`);
+                    localStorage.removeItem('nickname'); // 失敗したらニックネームをクリア
                     loginBtn.disabled = false;
                     loginBtnText.textContent = '記録をはじめる';
                 }
             }
-
-            // ログアウト処理
+            
             async function handleLogout() {
                 const confirmed = await showConfirmModal('ログアウトしますか？');
                 if (confirmed) {
                     localStorage.removeItem('nickname');
-                    // signOut(auth) は onAuthStateChanged で再サインインされるため不要
                     location.reload();
                 }
             }
             
-            // --- 初期化処理 ---
             async function initializeAppLogic() {
-                await loadCategories();
-                await loadRecords();
                 updateDateDisplay();
                 renderDailyView();
                 setupEventListeners();
             }
 
             // --- データ操作 (Firestore) ---
-            async function loadCategories() {
-                if (!nickname) return;
+            async function loadUserData() {
+                if (!nickname) throw new Error("Nickname is not defined.");
                 try {
-                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists() && docSnap.data().categories) {
-                        categories = docSnap.data().categories;
-                    } else {
-                        categories = JSON.parse(JSON.stringify(initialCategories)); // deep copy
-                        await saveCategories();
-                    }
-                } catch (error) {
-                    console.error("Error loading categories:", error);
-                    showAlertModal(`カテゴリの読み込みに失敗しました: ${error.message}`);
-                    throw error; // エラーを呼び出し元に伝播させる
-                }
-            }
+                    const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, nickname);
+                    const docSnap = await getDoc(userDocRef);
 
-            async function saveCategories() {
-                if (!nickname) return;
-                try {
-                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
-                    await setDoc(docRef, { categories });
-                } catch (error) {
-                    console.error("Error saving categories:", error);
-                    showAlertModal(`カテゴリの保存に失敗しました: ${error.message}`);
-                }
-            }
-
-            async function loadRecords() {
-                if (!nickname) return;
-                try {
-                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
-                    const docSnap = await getDoc(docRef);
-                    if (docSnap.exists() && docSnap.data().records) {
-                        records = docSnap.data().records;
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        categories = data.categories || JSON.parse(JSON.stringify(initialCategories));
+                        records = data.records || {};
                     } else {
+                        // 新規ユーザー
+                        console.log("New user detected. Creating initial data.");
+                        categories = JSON.parse(JSON.stringify(initialCategories));
                         records = {};
+                        await saveUserData(); // 新規データを保存
                     }
                 } catch (error) {
-                    console.error("Error loading records:", error);
-                    showAlertModal(`記録の読み込みに失敗しました: ${error.message}`);
-                    throw error; // エラーを呼び出し元に伝播させる
+                    console.error("Error loading user data:", error);
+                    throw error;
                 }
             }
 
-            async function saveRecords() {
+            async function saveUserData() {
                 if (!nickname) return;
                 try {
-                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
-                    await setDoc(docRef, { records });
+                    const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, nickname);
+                    await setDoc(userDocRef, { categories, records });
                 } catch (error) {
-                    console.error("Error saving records:", error);
-                    showAlertModal(`記録の保存に失敗しました: ${error.message}`);
+                    console.error("Error saving user data:", error);
+                    showAlertModal(`データの保存に失敗しました: ${error.message}`);
                 }
             }
             
@@ -376,7 +341,6 @@
                 updateDateDisplay();
                 const dateKey = formatDate(currentDate);
                 const dayRecords = records[dateKey] || { stretch: [], strength: [] };
-
                 renderCategoryItems('stretch', stretchItemsEl, dayRecords.stretch);
                 renderCategoryItems('strength', strengthItemsEl, dayRecords.strength);
             }
@@ -384,16 +348,13 @@
             function renderCategoryItems(category, container, completedItems) {
                 container.innerHTML = '';
                 if (!categories[category]) return;
-
                 categories[category].forEach(item => {
                     const btn = document.createElement('button');
                     btn.textContent = item;
                     btn.dataset.item = item;
                     btn.dataset.category = category;
-
                     const baseClasses = 'item-btn border-2 rounded-lg py-3 text-center transition-all duration-200 w-full text-sm sm:text-base';
                     let inactiveClasses, activeClasses;
-
                     if (category === 'stretch') {
                         inactiveClasses = 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100';
                         activeClasses = 'bg-emerald-500 border-emerald-500 text-white';
@@ -401,17 +362,14 @@
                         inactiveClasses = 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100';
                         activeClasses = 'bg-orange-500 border-orange-500 text-white';
                     }
-
                     const isCompleted = completedItems.includes(item);
                     btn.className = `${baseClasses} ${isCompleted ? activeClasses : inactiveClasses}`;
-                    
                     btn.addEventListener('click', () => handleItemClick(btn, category, item, inactiveClasses, activeClasses));
                     btn.addEventListener('mousedown', (e) => startLongPress(e, category, item));
                     btn.addEventListener('mouseup', cancelLongPress);
                     btn.addEventListener('mouseleave', cancelLongPress);
                     btn.addEventListener('touchstart', (e) => startLongPress(e, category, item), { passive: true });
                     btn.addEventListener('touchend', cancelLongPress);
-                    
                     container.appendChild(btn);
                 });
             }
@@ -419,35 +377,29 @@
             function renderCalendar() {
                 calendarGridEl.innerHTML = '';
                 calendarMonthYearEl.textContent = `${calendarDate.getFullYear()}年 ${calendarDate.getMonth() + 1}月`;
-                
                 ['日', '月', '火', '水', '木', '金', '土'].forEach(day => {
                     const dayEl = document.createElement('div');
                     dayEl.className = 'text-center font-bold text-sm text-gray-600';
                     dayEl.textContent = day;
                     calendarGridEl.appendChild(dayEl);
                 });
-
                 const year = calendarDate.getFullYear();
                 const month = calendarDate.getMonth();
                 const firstDayOfMonth = new Date(year, month, 1);
                 const lastDayOfMonth = new Date(year, month + 1, 0);
                 const today = new Date();
                 today.setHours(0,0,0,0);
-                
                 for (let i = 0; i < firstDayOfMonth.getDay(); i++) {
                     calendarGridEl.appendChild(document.createElement('div'));
                 }
-
                 for (let day = 1; day <= lastDayOfMonth.getDate(); day++) {
                     const date = new Date(year, month, day);
                     const dateKey = formatDate(date);
                     const dayEl = document.createElement('div');
                     dayEl.className = 'calendar-day h-12 flex flex-col justify-center items-center cursor-pointer';
-                    
                     const numberEl = document.createElement('span');
                     numberEl.textContent = day;
                     numberEl.className = 'w-8 h-8 flex items-center justify-center';
-                    
                     const iconEl = document.createElement('div');
                     iconEl.className = 'text-xs';
                     const dayRecords = records[dateKey];
@@ -462,22 +414,18 @@
                         icon = '😨';
                     }
                     iconEl.textContent = icon;
-                    
                     dayEl.appendChild(numberEl);
                     dayEl.appendChild(iconEl);
-
                     if (date.toDateString() === today.toDateString()) {
                         numberEl.classList.add('today');
                     }
                     if (date.toDateString() === currentDate.toDateString()){
                         dayEl.classList.add('selected');
                     }
-
                     dayEl.addEventListener('click', () => {
                         currentDate = date;
                         switchToDailyView();
                     });
-                    
                     calendarGridEl.appendChild(dayEl);
                 }
             }
@@ -485,7 +433,6 @@
 
             // --- イベントハンドラ ---
             function setupEventListeners() {
-                // ログイン/ログアウトボタン
                 loginBtn.addEventListener('click', () => {
                     const name = nicknameInput.value.trim();
                     if (name) {
@@ -495,8 +442,6 @@
                     }
                 });
                 logoutBtn.addEventListener('click', handleLogout);
-
-                // 日付操作
                 document.getElementById('prev-day').addEventListener('click', () => changeDay(-1));
                 document.getElementById('next-day').addEventListener('click', () => changeDay(1));
                 document.getElementById('current-date').addEventListener('click', switchToCalendarView);
@@ -506,15 +451,11 @@
                      currentDate = new Date();
                      switchToDailyView();
                 });
-
-                // 項目追加ボタン
                 document.querySelectorAll('.add-item-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
                         openEditModal('add', btn.dataset.category);
                     });
                 });
-                
-                // モーダルボタン
                 document.getElementById('modal-cancel').addEventListener('click', closeEditModal);
                 document.getElementById('modal-save').addEventListener('click', saveModal);
             }
@@ -534,13 +475,10 @@
                 if (!records[dateKey]) {
                     records[dateKey] = { stretch: [], strength: [] };
                 }
-
                 const completedList = records[dateKey][category];
                 const itemIndex = completedList.indexOf(item);
-
                 const inactive = inactiveClasses.split(' ');
                 const active = activeClasses.split(' ');
-
                 if (itemIndex > -1) {
                     completedList.splice(itemIndex, 1);
                     btn.classList.remove(...active);
@@ -550,7 +488,7 @@
                     btn.classList.remove(...inactive);
                     btn.classList.add(...active);
                 }
-                await saveRecords();
+                await saveUserData();
             }
 
             function startLongPress(e, category, item) {
@@ -579,12 +517,10 @@
                 const inputEl = document.getElementById('modal-input');
                 const deleteBtn = document.getElementById('modal-delete');
                 const saveBtn = document.getElementById('modal-save');
-
                 inputEl.value = currentItem;
                 saveBtn.dataset.mode = mode;
                 saveBtn.dataset.category = category;
                 saveBtn.dataset.currentItem = currentItem;
-
                 if (mode === 'add') {
                     titleEl.textContent = '項目を追加';
                     deleteBtn.classList.add('hidden');
@@ -605,12 +541,10 @@
                 const saveBtn = document.getElementById('modal-save');
                 const { mode, category, currentItem } = saveBtn.dataset;
                 const newItem = document.getElementById('modal-input').value.trim();
-
                 if (!newItem) {
                     showAlertModal('項目名を入力してください。');
                     return;
                 }
-
                 if (mode === 'add') {
                     if (categories[category].includes(newItem)) {
                         showAlertModal('同じ名前の項目が既に存在します。');
@@ -620,7 +554,7 @@
                 } else {
                     const itemIndex = categories[category].indexOf(currentItem);
                     if (itemIndex > -1) {
-                        categories[category][itemIndex] = newItem;
+                        // 過去の記録もすべて更新する
                         Object.keys(records).forEach(dateKey => {
                             const recordCategory = records[dateKey][category];
                             if(recordCategory) {
@@ -630,10 +564,10 @@
                                 }
                             }
                         });
-                        await saveRecords();
+                        categories[category][itemIndex] = newItem;
                     }
                 }
-                await saveCategories();
+                await saveUserData();
                 renderDailyView();
                 closeEditModal();
             }
@@ -657,8 +591,7 @@
                     }
                 });
                 
-                await saveCategories();
-                await saveRecords();
+                await saveUserData();
                 renderDailyView();
                 closeEditModal();
             }
@@ -689,7 +622,6 @@
                     };
                 });
             }
-
 
             // --- 画面切り替え ---
             function switchToCalendarView() {
