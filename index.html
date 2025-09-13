@@ -54,7 +54,9 @@
             <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">ログイン</h1>
             <p class="text-center text-gray-600 mb-6">ニックネームを入力してください</p>
             <input type="text" id="nickname-input" class="w-full border rounded p-3 text-lg mb-4" placeholder="ニックネーム">
-            <button id="login-btn" class="w-full bg-blue-500 text-white px-4 py-3 rounded-lg hover:bg-blue-600 font-bold">記録をはじめる</button>
+            <button id="login-btn" class="w-full bg-blue-500 text-white px-4 py-3 rounded-lg hover:bg-blue-600 font-bold disabled:bg-gray-400" disabled>
+                <span id="login-btn-text">初期化中...</span>
+            </button>
         </div>
     </div>
 
@@ -171,7 +173,7 @@
             apiKey: "AIzaSyDnyG7SgKXpoIa5RlnjkWb6gIh0yHwtvxg",
             authDomain: "kintre02.firebaseapp.com",
             projectId: "kintre02",
-            storageBucket: "kintre02.appspot.com", // storageBucketのドメイン名を修正
+            storageBucket: "kintre02.appspot.com",
             messagingSenderId: "765248944858",
             appId: "1:765248944858:web:03cdd0f7fd62aceff1c3e3",
             measurementId: "G-HHNE5R9V1D"
@@ -191,6 +193,7 @@
             const appContainer = document.getElementById('app-container');
             const nicknameInput = document.getElementById('nickname-input');
             const loginBtn = document.getElementById('login-btn');
+            const loginBtnText = document.getElementById('login-btn-text');
             const logoutBtn = document.getElementById('logout-btn');
             const displayNickname = document.getElementById('display-nickname');
             
@@ -211,36 +214,74 @@
             let records = {};
             let categories = {};
             let longPressTimer;
+            let isAuthReady = false; // 認証準備完了フラグ
             
             const initialCategories = {
                 stretch: ['首', '肩', '背中', '腰', '手首', '足首'],
                 strength: ['スクワット', 'ランジ', '腕立てふせ', '片足おじぎ', '腹筋', '背筋']
             };
+            
+            // --- 認証状態の監視 ---
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    // 匿名ユーザーとしてログイン済み
+                    isAuthReady = true;
+                    console.log("Firebase Auth is ready. UID:", user.uid);
+                    await checkLoginState();
+                } else {
+                    // 未ログイン状態。匿名サインインを試みる
+                    try {
+                        await signInAnonymously(auth);
+                        // 成功すると onAuthStateChanged が再度呼ばれる
+                        console.log("Signed in anonymously.");
+                    } catch (error) {
+                        console.error("Anonymous sign-in failed:", error);
+                        showAlertModal(`Firebaseへの接続に失敗しました: ${error.message}`);
+                    }
+                }
+            });
 
             // --- ログイン/ログアウト処理 ---
-            
-            // ログイン状態を確認し、画面を切り替える
-            function checkLoginState() {
+            async function checkLoginState() {
+                // 認証が完了していない場合は何もしない
+                if (!isAuthReady) {
+                    console.log("Auth is not ready yet. Waiting...");
+                    return;
+                }
+                
                 const storedNickname = localStorage.getItem('nickname');
                 if (storedNickname) {
-                    handleLogin(storedNickname);
+                    await handleLogin(storedNickname);
                 } else {
                     loginView.classList.remove('hidden');
                     appContainer.classList.add('hidden');
+                    loginBtn.disabled = false;
+                    loginBtnText.textContent = '記録をはじめる';
                 }
             }
 
             // ログイン処理
             async function handleLogin(name) {
-                nickname = name;
-                localStorage.setItem('nickname', nickname);
+                loginBtn.disabled = true;
+                loginBtnText.textContent = '読み込み中...';
                 
-                displayNickname.textContent = nickname;
-                loginView.classList.add('hidden');
-                appContainer.classList.remove('hidden');
-
-                await authenticateUser(); // 匿名認証を実行
-                await initializeAppLogic(); // アプリのメインロジックを初期化
+                nickname = name;
+                
+                try {
+                    await initializeAppLogic(); // アプリのメインロジックを初期化
+                    
+                    localStorage.setItem('nickname', nickname);
+                    displayNickname.textContent = nickname;
+                    
+                    // 成功したら画面を切り替え
+                    loginView.classList.add('hidden');
+                    appContainer.classList.remove('hidden');
+                } catch (error) {
+                    console.error("Login process failed:", error);
+                    showAlertModal(`データの読み込み中にエラーが発生しました: ${error.message}`);
+                    loginBtn.disabled = false;
+                    loginBtnText.textContent = '記録をはじめる';
+                }
             }
 
             // ログアウト処理
@@ -248,7 +289,7 @@
                 const confirmed = await showConfirmModal('ログアウトしますか？');
                 if (confirmed) {
                     localStorage.removeItem('nickname');
-                    await signOut(auth);
+                    // signOut(auth) は onAuthStateChanged で再サインインされるため不要
                     location.reload();
                 }
             }
@@ -262,64 +303,62 @@
                 setupEventListeners();
             }
 
-            // --- 認証処理 (匿名) ---
-            async function authenticateUser() {
-                return new Promise(resolve => {
-                    onAuthStateChanged(auth, async (user) => {
-                        if (user) {
-                            // 既に匿名ユーザーとしてログイン済み
-                            resolve();
-                        } else {
-                            try {
-                                // 匿名サインインを実行
-                                await signInAnonymously(auth);
-                                // onAuthStateChangedが再度呼ばれるので、そこで resolve される
-                            } catch (error) {
-                                console.error("Anonymous authentication failed:", error);
-                                // エラーが発生しても処理を続ける
-                                resolve();
-                            }
-                        }
-                    });
-                });
-            }
-
-
             // --- データ操作 (Firestore) ---
-            // ニックネームをキーとしてデータを保存/読み込みするように変更
             async function loadCategories() {
                 if (!nickname) return;
-                const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists() && docSnap.data().categories) {
-                    categories = docSnap.data().categories;
-                } else {
-                    categories = JSON.parse(JSON.stringify(initialCategories)); // deep copy
-                    await saveCategories();
+                try {
+                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists() && docSnap.data().categories) {
+                        categories = docSnap.data().categories;
+                    } else {
+                        categories = JSON.parse(JSON.stringify(initialCategories)); // deep copy
+                        await saveCategories();
+                    }
+                } catch (error) {
+                    console.error("Error loading categories:", error);
+                    showAlertModal(`カテゴリの読み込みに失敗しました: ${error.message}`);
+                    throw error; // エラーを呼び出し元に伝播させる
                 }
             }
 
             async function saveCategories() {
                 if (!nickname) return;
-                const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
-                await setDoc(docRef, { categories });
+                try {
+                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'categories');
+                    await setDoc(docRef, { categories });
+                } catch (error) {
+                    console.error("Error saving categories:", error);
+                    showAlertModal(`カテゴリの保存に失敗しました: ${error.message}`);
+                }
             }
 
             async function loadRecords() {
                 if (!nickname) return;
-                const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists() && docSnap.data().records) {
-                    records = docSnap.data().records;
-                } else {
-                    records = {};
+                try {
+                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists() && docSnap.data().records) {
+                        records = docSnap.data().records;
+                    } else {
+                        records = {};
+                    }
+                } catch (error) {
+                    console.error("Error loading records:", error);
+                    showAlertModal(`記録の読み込みに失敗しました: ${error.message}`);
+                    throw error; // エラーを呼び出し元に伝播させる
                 }
             }
 
             async function saveRecords() {
                 if (!nickname) return;
-                const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
-                await setDoc(docRef, { records });
+                try {
+                    const docRef = doc(db, `artifacts/${appId}/public/data/${nickname}`, 'records');
+                    await setDoc(docRef, { records });
+                } catch (error) {
+                    console.error("Error saving records:", error);
+                    showAlertModal(`記録の保存に失敗しました: ${error.message}`);
+                }
             }
             
             // --- 日付フォーマット ---
@@ -665,10 +704,8 @@
                 calendarView.classList.add('hidden');
                 dailyView.classList.remove('hidden');
             }
-
-            // --- アプリケーション開始 ---
-            checkLoginState();
         });
     </script>
 </body>
 </html>
+
