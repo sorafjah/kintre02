@@ -164,7 +164,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- Firebaseの初期化 ---
@@ -184,11 +184,9 @@
         const auth = getAuth(app);
         const appId = typeof __app_id !== 'undefined' ? __app_id : firebaseConfig.projectId;
         
-        // --- グローバル変数 ---
-        let nickname; // ユーザーのニックネームを保持
+        let nickname;
 
         document.addEventListener('DOMContentLoaded', () => {
-            // --- DOM要素の取得 ---
             const loginView = document.getElementById('login-view');
             const appContainer = document.getElementById('app-container');
             const nicknameInput = document.getElementById('nickname-input');
@@ -196,9 +194,6 @@
             const loginBtnText = document.getElementById('login-btn-text');
             const logoutBtn = document.getElementById('logout-btn');
             const displayNickname = document.getElementById('display-nickname');
-            
-            const dailyView = document.getElementById('daily-view');
-            const calendarView = document.getElementById('calendar-view');
             const currentDateEl = document.getElementById('current-date');
             const stretchItemsEl = document.getElementById('stretch-items');
             const strengthItemsEl = document.getElementById('strength-items');
@@ -208,31 +203,28 @@
             const confirmModal = document.getElementById('confirm-modal');
             const alertModal = document.getElementById('alert-modal');
 
-            // --- 状態管理 ---
             let currentDate = new Date();
             let calendarDate = new Date();
             let records = {};
             let categories = {};
             let longPressTimer;
-            let isAuthReady = false; // 認証準備完了フラグ
+            let isAuthReady = false;
             
             const initialCategories = {
                 stretch: ['首', '肩', '背中', '腰', '手首', '足首'],
                 strength: ['スクワット', 'ランジ', '腕立てふせ', '片足おじぎ', '腹筋', '背筋']
             };
             
-            // --- 認証状態の監視 ---
             onAuthStateChanged(auth, async (user) => {
                 if (user) {
-                    if (isAuthReady) return; // 既に初期化済みの場合は何もしない
+                    if (isAuthReady) return;
                     isAuthReady = true;
                     console.log("Firebase Auth is ready. UID:", user.uid);
                     await checkLoginState();
                 } else {
                      try {
                         await signInAnonymously(auth);
-                        console.log("Signed in anonymously.");
-                    } catch (error) {
+                     } catch (error) {
                         console.error("Anonymous sign-in failed:", error);
                         loginBtnText.textContent = 'エラー';
                         showAlertModal(`Firebaseへの接続に失敗しました: ${error.message}`);
@@ -240,17 +232,13 @@
                 }
             });
 
-            // --- ログイン/ログアウト処理 ---
             async function checkLoginState() {
-                if (!isAuthReady) {
-                    console.log("Auth is not ready yet. Waiting...");
-                    return;
-                }
+                if (!isAuthReady) return;
                 const storedNickname = localStorage.getItem('nickname');
                 if (storedNickname) {
                     await handleLogin(storedNickname);
                 } else {
-                    loginView.style.display = 'flex'; // flexboxで中央寄せを維持
+                    loginView.style.display = 'flex';
                     appContainer.classList.add('hidden');
                     loginBtn.disabled = false;
                     loginBtnText.textContent = '記録をはじめる';
@@ -258,20 +246,31 @@
             }
 
             async function handleLogin(name) {
+                console.log(`Attempting to log in as "${name}"`);
+                if (name.includes('/')) {
+                    showAlertModal('ニックネームに "/" を含めることはできません。');
+                    return;
+                }
+
                 loginBtn.disabled = true;
                 loginBtnText.textContent = '読み込み中...';
                 nickname = name;
+
                 try {
-                    await loadUserData(); // ユーザーデータを読み込む
-                    await initializeAppLogic(); // アプリのメインロジックを初期化
+                    await loadUserData();
+                    initializeAppLogic();
+                    
                     localStorage.setItem('nickname', nickname);
                     displayNickname.textContent = nickname;
-                    loginView.style.display = 'none'; // ログイン画面を非表示
+                    
+                    loginView.style.display = 'none';
                     appContainer.classList.remove('hidden');
+                    console.log("Login successful.");
                 } catch (error) {
                     console.error("Login process failed:", error);
                     showAlertModal(`データの読み込み中にエラーが発生しました: ${error.message}`);
-                    localStorage.removeItem('nickname'); // 失敗したらニックネームをクリア
+                    localStorage.removeItem('nickname');
+                    nickname = null;
                     loginBtn.disabled = false;
                     loginBtnText.textContent = '記録をはじめる';
                 }
@@ -285,53 +284,75 @@
                 }
             }
             
-            async function initializeAppLogic() {
+            function initializeAppLogic() {
                 updateDateDisplay();
                 renderDailyView();
                 setupEventListeners();
+                console.log("Application logic initialized.");
             }
 
             // --- データ操作 (Firestore) ---
             async function loadUserData() {
-                if (!nickname) throw new Error("Nickname is not defined.");
+                if (!nickname) throw new Error("Nickname is not defined for loading data.");
+                console.log("Loading user data from Firestore...");
+                
                 try {
-                    const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, nickname);
-                    const docSnap = await getDoc(userDocRef);
+                    const categoriesDocRef = doc(db, `artifacts/${appId}/public/data/${nickname}/data/categories`);
+                    const recordsDocRef = doc(db, `artifacts/${appId}/public/data/${nickname}/data/records`);
+            
+                    const [categoriesSnap, recordsSnap] = await Promise.all([
+                        getDoc(categoriesDocRef),
+                        getDoc(recordsDocRef)
+                    ]);
 
-                    if (docSnap.exists()) {
-                        const data = docSnap.data();
-                        categories = data.categories || JSON.parse(JSON.stringify(initialCategories));
-                        records = data.records || {};
+                    if (categoriesSnap.exists()) {
+                        categories = categoriesSnap.data().data;
                     } else {
-                        // 新規ユーザー
-                        console.log("New user detected. Creating initial data.");
                         categories = JSON.parse(JSON.stringify(initialCategories));
-                        records = {};
-                        await saveUserData(); // 新規データを保存
+                        await saveCategories();
                     }
+
+                    if (recordsSnap.exists()) {
+                        records = recordsSnap.data().data;
+                    } else {
+                        records = {};
+                        await saveRecords();
+                    }
+                    console.log("User data loaded successfully.");
                 } catch (error) {
-                    console.error("Error loading user data:", error);
+                    console.error("Error in loadUserData:", error);
                     throw error;
                 }
             }
 
-            async function saveUserData() {
+            async function saveCategories() {
                 if (!nickname) return;
                 try {
-                    const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, nickname);
-                    await setDoc(userDocRef, { categories, records });
-                } catch (error) {
-                    console.error("Error saving user data:", error);
-                    showAlertModal(`データの保存に失敗しました: ${error.message}`);
+                    const categoriesDocRef = doc(db, `artifacts/${appId}/public/data/${nickname}/data/categories`);
+                    await setDoc(categoriesDocRef, { data: categories });
+                    console.log("Categories saved.");
+                } catch(e) {
+                    console.error("Error saving categories:", e);
+                    showAlertModal("カテゴリの保存に失敗しました。");
                 }
             }
-            
-            // --- 日付フォーマット ---
+
+            async function saveRecords() {
+                 if (!nickname) return;
+                try {
+                    const recordsDocRef = doc(db, `artifacts/${appId}/public/data/${nickname}/data/records`);
+                    await setDoc(recordsDocRef, { data: records });
+                    console.log("Records saved.");
+                } catch(e) {
+                    console.error("Error saving records:", e);
+                    showAlertModal("記録の保存に失敗しました。");
+                }
+            }
+
             function formatDate(date) {
                 return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             }
 
-            // --- 画面描画 ---
             function updateDateDisplay() {
                 const options = { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' };
                 currentDateEl.textContent = currentDate.toLocaleDateString('ja-JP', options);
@@ -347,7 +368,7 @@
             
             function renderCategoryItems(category, container, completedItems) {
                 container.innerHTML = '';
-                if (!categories[category]) return;
+                if (!categories || !categories[category]) return;
                 categories[category].forEach(item => {
                     const btn = document.createElement('button');
                     btn.textContent = item;
@@ -358,11 +379,11 @@
                     if (category === 'stretch') {
                         inactiveClasses = 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100';
                         activeClasses = 'bg-emerald-500 border-emerald-500 text-white';
-                    } else { // strength
+                    } else {
                         inactiveClasses = 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100';
                         activeClasses = 'bg-orange-500 border-orange-500 text-white';
                     }
-                    const isCompleted = completedItems.includes(item);
+                    const isCompleted = completedItems && completedItems.includes(item);
                     btn.className = `${baseClasses} ${isCompleted ? activeClasses : inactiveClasses}`;
                     btn.addEventListener('click', () => handleItemClick(btn, category, item, inactiveClasses, activeClasses));
                     btn.addEventListener('mousedown', (e) => startLongPress(e, category, item));
@@ -410,18 +431,12 @@
                         if(didStretch) icon += '🍀';
                         if(didStrength) icon += '💪';
                     }
-                    if (!icon && date < today) {
-                        icon = '😨';
-                    }
+                    if (!icon && date < today) icon = '😨';
                     iconEl.textContent = icon;
                     dayEl.appendChild(numberEl);
                     dayEl.appendChild(iconEl);
-                    if (date.toDateString() === today.toDateString()) {
-                        numberEl.classList.add('today');
-                    }
-                    if (date.toDateString() === currentDate.toDateString()){
-                        dayEl.classList.add('selected');
-                    }
+                    if (date.toDateString() === today.toDateString()) numberEl.classList.add('today');
+                    if (date.toDateString() === currentDate.toDateString()) dayEl.classList.add('selected');
                     dayEl.addEventListener('click', () => {
                         currentDate = date;
                         switchToDailyView();
@@ -430,16 +445,11 @@
                 }
             }
 
-
-            // --- イベントハンドラ ---
             function setupEventListeners() {
                 loginBtn.addEventListener('click', () => {
                     const name = nicknameInput.value.trim();
-                    if (name) {
-                        handleLogin(name);
-                    } else {
-                        showAlertModal('ニックネームを入力してください。');
-                    }
+                    if (name) handleLogin(name);
+                    else showAlertModal('ニックネームを入力してください。');
                 });
                 logoutBtn.addEventListener('click', handleLogout);
                 document.getElementById('prev-day').addEventListener('click', () => changeDay(-1));
@@ -452,9 +462,7 @@
                      switchToDailyView();
                 });
                 document.querySelectorAll('.add-item-btn').forEach(btn => {
-                    btn.addEventListener('click', () => {
-                        openEditModal('add', btn.dataset.category);
-                    });
+                    btn.addEventListener('click', () => openEditModal('add', btn.dataset.category));
                 });
                 document.getElementById('modal-cancel').addEventListener('click', closeEditModal);
                 document.getElementById('modal-save').addEventListener('click', saveModal);
@@ -472,9 +480,7 @@
 
             async function handleItemClick(btn, category, item, inactiveClasses, activeClasses) {
                 const dateKey = formatDate(currentDate);
-                if (!records[dateKey]) {
-                    records[dateKey] = { stretch: [], strength: [] };
-                }
+                if (!records[dateKey]) records[dateKey] = { stretch: [], strength: [] };
                 const completedList = records[dateKey][category];
                 const itemIndex = completedList.indexOf(item);
                 const inactive = inactiveClasses.split(' ');
@@ -488,7 +494,7 @@
                     btn.classList.remove(...inactive);
                     btn.classList.add(...active);
                 }
-                await saveUserData();
+                await saveRecords();
             }
 
             function startLongPress(e, category, item) {
@@ -504,14 +510,9 @@
 
             function cancelLongPress(e) {
                 e.currentTarget.classList.remove('long-press-active');
-                if (longPressTimer) {
-                    clearTimeout(longPressTimer);
-                    longPressTimer = null;
-                }
+                if (longPressTimer) clearTimeout(longPressTimer);
             }
 
-
-            // --- モーダル操作 ---
             function openEditModal(mode, category, currentItem = '') {
                 const titleEl = document.getElementById('modal-title');
                 const inputEl = document.getElementById('modal-input');
@@ -541,33 +542,27 @@
                 const saveBtn = document.getElementById('modal-save');
                 const { mode, category, currentItem } = saveBtn.dataset;
                 const newItem = document.getElementById('modal-input').value.trim();
-                if (!newItem) {
-                    showAlertModal('項目名を入力してください。');
-                    return;
-                }
+                if (!newItem) return showAlertModal('項目名を入力してください。');
+                
                 if (mode === 'add') {
-                    if (categories[category].includes(newItem)) {
-                        showAlertModal('同じ名前の項目が既に存在します。');
-                        return;
-                    }
+                    if (categories[category].includes(newItem)) return showAlertModal('同じ名前の項目が既に存在します。');
                     categories[category].push(newItem);
+                    await saveCategories();
                 } else {
                     const itemIndex = categories[category].indexOf(currentItem);
                     if (itemIndex > -1) {
-                        // 過去の記録もすべて更新する
                         Object.keys(records).forEach(dateKey => {
-                            const recordCategory = records[dateKey][category];
-                            if(recordCategory) {
-                                const recordItemIndex = recordCategory.indexOf(currentItem);
-                                if (recordItemIndex > -1) {
-                                    recordCategory[recordItemIndex] = newItem;
-                                }
+                            const catRecords = records[dateKey][category];
+                            if(catRecords) {
+                                const recIndex = catRecords.indexOf(currentItem);
+                                if (recIndex > -1) catRecords[recIndex] = newItem;
                             }
                         });
                         categories[category][itemIndex] = newItem;
+                        await saveCategories();
+                        await saveRecords();
                     }
                 }
-                await saveUserData();
                 renderDailyView();
                 closeEditModal();
             }
@@ -575,28 +570,21 @@
             async function deleteItem(category, item) {
                 const confirmed = await showConfirmModal(`「${item}」を削除しますか？すべての記録からこの項目が削除されます。`);
                 if (!confirmed) return;
-
                 const itemIndex = categories[category].indexOf(item);
-                if (itemIndex > -1) {
-                    categories[category].splice(itemIndex, 1);
-                }
-
+                if (itemIndex > -1) categories[category].splice(itemIndex, 1);
                 Object.keys(records).forEach(dateKey => {
-                    const recordCategory = records[dateKey][category];
-                    if (recordCategory) {
-                         const recordItemIndex = recordCategory.indexOf(item);
-                         if (recordItemIndex > -1) {
-                            recordCategory.splice(recordItemIndex, 1);
-                         }
+                    const catRecords = records[dateKey][category];
+                    if (catRecords) {
+                         const recIndex = catRecords.indexOf(item);
+                         if (recIndex > -1) catRecords.splice(recIndex, 1);
                     }
                 });
-                
-                await saveUserData();
+                await saveCategories();
+                await saveRecords();
                 renderDailyView();
                 closeEditModal();
             }
             
-            // --- カスタムモーダル関数 ---
             function showAlertModal(message) {
                 document.getElementById('alert-message').textContent = message;
                 alertModal.classList.remove('hidden');
@@ -623,7 +611,6 @@
                 });
             }
 
-            // --- 画面切り替え ---
             function switchToCalendarView() {
                 calendarDate = new Date(currentDate);
                 renderCalendar();
